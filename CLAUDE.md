@@ -7,6 +7,17 @@ gateway multiplexing, cron/proactive check-ins, tracking domains, dashboard).
 For the full history/reasoning behind every decision and bug fix, see
 `~/.claude/plans/vivid-greeting-perlis.md`.
 
+This directory (`mentor-stack`) is its own git repo (initialized 2026-10-05) —
+source code only. Real family data (`mentor.db`, each profile's holographic
+memory, session transcripts) is deliberately NOT in this repo — see
+`~/repos/ev-workflow/mentor-data-backup/` (a separate, local-only git repo)
+and its own `backup.sh`. Run that script by hand whenever a fresh snapshot is
+wanted (manual only, by the user's own choice — no crontab entry exists for
+it) — don't add scheduling without asking first, and never add a remote or
+push either repo without re-confirming, since the backup repo's history holds
+real personal data (health metrics, location sharing, learned facts,
+conversation transcripts) that must never leave this machine.
+
 ## Standing rules for this project
 - No installs on the host — everything runs in Docker containers.
 - Every real family member gets their own isolated Hermes profile
