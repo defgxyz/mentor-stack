@@ -1,0 +1,191 @@
+services:
+  mentor-mcp:
+    build: ./mentor-mcp
+    container_name: mentor-mcp
+    restart: unless-stopped
+    environment:
+      # For create_user's automatic Hermes profile provisioning (POST
+      # /api/profiles) - same dashboard.basic_auth credential
+      # mentor-dashboard already uses, not a new secret.
+      - HERMES_DASHBOARD_USERNAME=${HERMES_DASHBOARD_USERNAME}
+      - HERMES_DASHBOARD_PASSWORD=${HERMES_DASHBOARD_PASSWORD}
+    volumes:
+      - ./mentor_data:/app/mentor_data
+      # Scoped narrowly to just the pairing subdir (not all of ~/.hermes) for
+      # approve_pairing_code/list_pending_pairings - least-privilege access to
+      # Hermes's own auth state, not the credentials/config living alongside it.
+      - ~/.hermes/platforms/pairing:/hermes_home/platforms/pairing
+      # Single-file mount (not the whole ~/.hermes), read-write, so a newly
+      # paired family member's chat can be routed to their own isolated
+      # Hermes profile (gateway.profile_routes) at the moment their pairing
+      # is approved - same narrow-single-file pattern already used for the
+      # Caddyfile mounts elsewhere in this stack, not a broader grant.
+      - ~/.hermes/config.yaml:/hermes_home/config.yaml
+      # Read-write, for tools_memory.py's fact_store access: reading any
+      # profile's facts (Hermes has no REST endpoint that lists them), and
+      # writing/updating/deleting real rows for two syncs - the
+      # shared-fact sync into family's memory (set_fact_visibility), and
+      # the profile-field sync (sync_profile_to_own_memory) which upserts
+      # a summary fact into a PERSON'S OWN memory_store.db first, then
+      # shares it via the same path. Was read-only + a narrow nested :rw
+      # override for just family's own directory until the profile-field
+      # sync needed to write into every real person's own store too, not
+      # just family's - a deliberate widening, not an oversight: this
+      # container already has full read-write control over every person's
+      # identity fields via update_user, so extending that trust to one
+      # narrowly-scoped, ledger-tracked fact in their own fact_store is an
+      # incremental step, not a new category of exposure. Directory-wide
+      # since profiles are auto-provisioned by name; the app code only
+      # ever touches the one well-known memory_store.db filename per
+      # profile, and only ever inserts/updates/deletes rows tracked by its
+      # own ledger tables (family_synced_facts, user_profile_facts) -
+      # never arbitrary content.
+      - ~/.hermes/profiles:/hermes_home/profiles:rw
+
+  mentor-dashboard:
+    build: ./mentor-dashboard
+    container_name: mentor-dashboard
+    restart: unless-stopped
+    depends_on:
+      - hermes
+    environment:
+      # For the chat panel's WS proxy to Hermes's real /api/pty (password-login
+      # -> ws-ticket handshake) - same dashboard.basic_auth credential
+      # configured in Hermes's own config.yaml, not a separate secret.
+      - HERMES_DASHBOARD_USERNAME=${HERMES_DASHBOARD_USERNAME}
+      - HERMES_DASHBOARD_PASSWORD=${HERMES_DASHBOARD_PASSWORD}
+      - CADDYFILE_PATH=/caddy/Caddyfile
+      - CADDY_RELOAD_URL=http://caddy:9999/reload
+      - CADDY_RELOAD_TOKEN=${CADDY_RELOAD_TOKEN}
+    volumes:
+      - ./mentor_data:/app/mentor_data
+      - ./caddy/Caddyfile:/caddy/Caddyfile
+      # For the new Admin "Telegram onboarding" card - list_pending_pairings/
+      # approve_pairing_code (tools_pairing.py) need the same two mounts
+      # mentor-mcp already has: the pairing subdir (Hermes's own pending/
+      # approved pairing state) and config.yaml (to add the approved
+      # person's gateway.profile_routes entry) - same narrow single-file/
+      # single-subdir scoping, not all of ~/.hermes.
+      - ~/.hermes/platforms/pairing:/hermes_home/platforms/pairing
+      - ~/.hermes/config.yaml:/hermes_home/config.yaml
+      # Read-write - see mentor-mcp's own copy of this mount for the full
+      # explanation (same tools_memory.py functions, same two syncs: the
+      # dashboard's Shared toggle and its "Edit profile" form call the
+      # exact same set_fact_visibility / sync_profile_to_own_memory as the
+      # mentor-mcp tools do, so need the same access).
+      - ~/.hermes/profiles:/hermes_home/profiles:rw
+
+  hermes:
+    image: nousresearch/hermes-agent:latest
+    container_name: hermes
+    restart: unless-stopped
+    command: gateway run
+    depends_on:
+      - mentor-mcp
+    environment:
+      - HERMES_DASHBOARD=1
+    volumes:
+      - ~/.hermes:/opt/data
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
+
+  mentor-auth:
+    build: ./mentor-auth
+    container_name: mentor-auth
+    restart: unless-stopped
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+    volumes:
+      - ./mentor-auth-data:/app/data
+
+  open-wearables-mcp:
+    build: ./open-wearables/mcp
+    container_name: open-wearables-mcp
+    restart: unless-stopped
+    env_file:
+      - ./open-wearables/mcp/config/.env
+    networks:
+      - default
+      - open-wearables_default
+
+  owntracks-recorder:
+    image: owntracks/recorder:latest
+    container_name: owntracks-recorder
+    restart: unless-stopped
+    environment:
+      - OTR_PORT=0  # HTTP-only, no MQTT broker needed
+      - OTR_HTTPHOST=0.0.0.0
+      - OTR_HTTPPORT=8083
+    volumes:
+      - ./owntracks-data:/store
+
+  owntracks-mcp:
+    build: ./owntracks-mcp
+    container_name: owntracks-mcp
+    restart: unless-stopped
+    depends_on:
+      - owntracks-recorder
+    environment:
+      - CADDYFILE_PATH=/caddy/Caddyfile
+      - CADDY_RELOAD_URL=http://caddy:9999/reload
+      - CADDY_RELOAD_TOKEN=${CADDY_RELOAD_TOKEN}
+    volumes:
+      - ./mentor_data:/app/mentor_data
+      # Read-write, narrowly for provision_owntracks_credential to edit the
+      # owntracks.defg.xyz basic_auth block - not the whole ~/.hermes or
+      # any other service's config, matching the least-privilege mounts
+      # used elsewhere in this stack.
+      - ./caddy/Caddyfile:/caddy/Caddyfile
+
+  # Read-only MCP wrapper around Stacks (self-hosted family media library)'s
+  # own curation API, for suggesting real, already-available content based
+  # on a person's interests. Only ever reads (library:read) - the write side
+  # (building/editing Stacks' own lists) belongs to a separate curator-role
+  # agent that lives in the Stacks repo itself, not to Mentor.
+  stacks-mcp:
+    build: ./stacks-mcp
+    container_name: stacks-mcp
+    restart: unless-stopped
+    environment:
+      # Stacks' own web container shares its network namespace with a VPN
+      # sidecar (its outbound traffic routes through it) and has no
+      # independent container-name network identity to join - its real,
+      # stable host-published port is the robust way in, not a shared
+      # docker network. Confirmed live: host port 3002 -> Stacks' own 3001.
+      - STACKS_API_URL=${STACKS_API_URL:-http://host.docker.internal:3002}
+      # library:read-scoped bearer token, created by the Stacks administrator
+      # (Admin -> Agent access -> New token) - never self-provisioned here.
+      - STACKS_API_TOKEN=${STACKS_API_TOKEN}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  caddy:
+    build: ./caddy
+    container_name: mentor-caddy
+    restart: unless-stopped
+    environment:
+      # Shared secret for the narrow internal reload-trigger sidecar
+      # (reload_server.py) - lets another container ask Caddy to pick up a
+      # Caddyfile change (e.g. a new OwnTracks credential) without
+      # docker-socket access or exposing the full Caddy admin API. The
+      # sidecar can only re-run `caddy reload` from the file already on
+      # disk - no config-rewrite capability of its own.
+      - CADDY_RELOAD_TOKEN=${CADDY_RELOAD_TOKEN}
+    depends_on:
+      - mentor-dashboard
+      - hermes
+      - mentor-auth
+      - owntracks-recorder
+    ports:
+      - "127.0.0.1:8100:80"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile
+
+networks:
+  default: {}
+  open-wearables_default:
+    external: true

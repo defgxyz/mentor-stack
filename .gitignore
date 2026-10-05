@@ -1,0 +1,19 @@
+# Secrets / credentials - never committed
+.env
+.env.*
+caddy/Caddyfile
+
+# Live data - real family data, not source (DB, location history, auth session state)
+mentor_data/mentor.db
+mentor_data/mentor.db-wal
+mentor_data/mentor.db-shm
+mentor_data/mentor.db.bkp-*
+mentor-auth-data/
+owntracks-data/
+
+# Third-party vendored clone with its own separate git history/origin
+open-wearables/
+
+# Python artifacts
+__pycache__/
+*.pyc
