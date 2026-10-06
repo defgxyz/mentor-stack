@@ -100,6 +100,17 @@ conversation transcripts) that must never leave this machine.
   REQUIRED in practice despite its own OpenAPI spec claiming otherwise
   (confirmed live, 400 without it) — trust live behavior over that spec.
   See `ARCHITECTURE.md` §6b.
+- Home network presence (`tplink-mcp`, the TP-Link router at `192.168.0.1`)
+  — the router's own `active` field is NOT a reliable presence signal
+  (confirmed live, stayed true for an idle guest device); `down_speed`/
+  `up_speed` > 0 ("transferring right now") is the one trustworthy
+  signal, and even that only proves "definitely active," never "away"
+  when it's 0. Gated by its OWN opt-in flag
+  (`share_network_activity_with_family`), separate from location's.
+  Any MCP server importing `mentor_data` needs `croniter` in its own
+  Dockerfile (a real latent bug - `owntracks-mcp` was missing it and
+  would have crashed on its next restart, found and fixed while building
+  this). See `ARCHITECTURE.md` §6c.
 - Every destructive/cancellation-style dashboard action (archive an
   objective, abandon a service, revoke a permission — anything
   whose effect isn't obviously and immediately reversible with one more

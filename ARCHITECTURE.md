@@ -682,6 +682,83 @@ curated *index*, not something that already has everything).
 
 ---
 
+## 6c. Home network presence (TP-Link router) — added 2026-10-06
+
+`tplink-mcp` wraps the family's TP-Link Archer AX10 v3 router (192.168.0.1)
+via `tplinkrouterc6u` (open-source, the same library Home Assistant's own
+TP-Link integration uses) — lets Mentor say whether a person's linked
+device is currently seen by the router and whether it's actually
+transferring data right now.
+
+- **Real router API, reverse-engineered from its own JS before adopting
+  the library, not guessed**: the live admin UI (a Vue SPA) calls
+  `POST /cgi-bin/luci/;stok=<token><path>` with RSA-then-AES-encrypted
+  bodies for everything except a small bootstrap whitelist (login/locale).
+  Confirmed by downloading and reading the router's own JS bundles
+  directly (`update-store-*.js`) rather than assuming a documented
+  convention — this family of router has no public API docs at all.
+  Chosen path: adopt `tplinkrouterc6u` (already implements this exact
+  handshake, tested across many Archer models) rather than hand-roll the
+  crypto against one firmware snapshot (1.10.2) that could change.
+- **Real, live finding that shaped the whole design**: the router's own
+  `active` field is NOT a reliable presence signal — confirmed directly
+  against the real device list, it stayed `true` for an idle guest device
+  with `ipaddr: 0.0.0.0`. The field actually trusted, per the user's own
+  explicit call after seeing both side by side: `down_speed`/`up_speed`
+  (the router's own live `downloadSpeed`/`uploadSpeed`, confirmed via the
+  library's own source to be passed straight through, not estimated) being
+  nonzero — genuinely means that device is transferring data at that exact
+  moment. The reverse doesn't hold: idle-but-present (phone on the couch,
+  screen off) still reads `0/0`, so "not transferring" is never reported
+  as "away" — every tool result and SOUL.md's own guidance say this
+  plainly rather than let it be misread as a clean presence test.
+- **No usage history** — only a live snapshot exists. `traffic_usage`/
+  `online_time` are cumulative counters that reset on router reboot
+  (confirmed: WAN uptime and the longest `online_time` values lined up),
+  not a real daily/weekly total. Building genuine "how much and when"
+  history would mean polling this periodically ourselves (the Services
+  mechanism, §3c, is the obvious fit) and logging it — not yet built.
+- **Access**: same shape as location (self always, family admin always,
+  opt-in for anyone else) but through a SEPARATE flag
+  (`share_network_activity_with_family`) — being fine with network
+  presence visibility doesn't imply being fine with GPS location, or the
+  reverse. Device linking (`link_network_device`, which MAC belongs to
+  which Mentor user) is admin-only, via the same generic devices/
+  device_services model `owntracks-mcp` already uses (`service_type=
+  "network"`, `provider="tplink_router"`, `external_id`=MAC).
+- **Real latent bug found and fixed while building this, unrelated to the
+  router itself**: `owntracks-mcp` imports `mentor_data`, which transitively
+  needs `croniter` (via `tools_objectives`→`scheduling`) — but its own
+  Dockerfile never got `croniter` added when that dependency was
+  introduced. It was only still running because its process hadn't
+  restarted since before that change; a fresh restart would have crashed
+  it immediately (confirmed by reproducing the exact `ModuleNotFoundError`
+  live, then fixing and re-verifying a clean restart). Fixed in
+  `owntracks-mcp/Dockerfile` alongside building `tplink-mcp` fresh with
+  the same dependency included from the start.
+- **Verified end-to-end with real data**: real login against the real
+  router (confirmed via direct test, not assumed from the library's own
+  claims); admin gate correctly refused a non-admin (Jasmine); self-query
+  succeeded for Evgeniy with real live numbers; a non-admin, non-self,
+  not-opted-in query was correctly refused citing the real reason; opt-in
+  toggled on/off and the same query's outcome flipped correctly both ways
+  (reverted to off afterward — no real decision was made to actually
+  share this). A live `hermes -z` conversational test (as Evgeniy, asking
+  about his own activity) correctly relayed the nuance — flagged
+  `router_reported_active` as unreliable, correctly read `transferring_now:
+  false` as "idle, not evidence of being away," and labelled the usage
+  counters as cumulative-since-reboot rather than a daily total.
+- **Not yet linked**: only Evgeniy's own device (`Ev-Mac`) is linked so
+  far, for verification. The router's real client list also shows
+  recognizable but unlinked devices (`Mac-Ben`/`Phone-Ben` → likely
+  Benjamin; `Phone-Mom`/`NB-Mom` → ambiguous, could be Jennifer or
+  Natalia, not guessed; `Phone-Ev`, `iPhone`, `Watch` → likely also
+  Evgeniy's; `Echo`/`Echo-2`/`Switch`/`linux`/`Galaxy-S8-Guest` → shared/
+  non-personal devices, not worth linking to any one person) — linking
+  the rest is a real decision for the user, not assumed here.
+
+---
+
 ## 7. Known open items (as of 2026-09-27)
 
 - **Stacks integration live and verified** (2026-10-05) — see §6b. Token

@@ -96,7 +96,8 @@ CREATE TABLE IF NOT EXISTS users (
     share_location_with_family INTEGER NOT NULL DEFAULT 0,
     date_of_birth TEXT,
     gender TEXT,
-    role TEXT
+    role TEXT,
+    share_network_activity_with_family INTEGER NOT NULL DEFAULT 0
 );
 
 -- A physical device belonging to a user (phone, tablet, laptop, watch...).
@@ -552,6 +553,13 @@ _MIGRATIONS = [
     # time _MIGRATIONS runs (after _SCHEMA), the table no longer exists
     # under the old name, so those lines would always silently no-op anyway
     # (caught by this loop's own OperationalError handling either way).
+    # Same shape and purpose as share_location_with_family (self always,
+    # family admin always, opt-in for anyone else) but a SEPARATE flag,
+    # deliberately - being fine with "my phone shows up as online/offline
+    # and transferring data or not" is a different consent than being fine
+    # with precise GPS location, and either should be settable without the
+    # other changing.
+    "ALTER TABLE users ADD COLUMN share_network_activity_with_family INTEGER NOT NULL DEFAULT 0",
 ]
 
 # Evgeniy's own Telegram pairing predates the `conversations` table entirely

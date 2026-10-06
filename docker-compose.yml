@@ -163,6 +163,25 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
+  # Real-time home-network presence/activity from the family's TP-Link
+  # router (Archer AX10 v3), via the open-source tplinkrouterc6u library
+  # (confirmed live - the router's own `active` flag is NOT a reliable
+  # presence signal; `down_speed`/`up_speed` > 0, "transferring right now,"
+  # is the one trustworthy signal, per the user's own explicit call after
+  # live testing). The router (192.168.0.1) is reachable directly on this
+  # service's default bridge network - confirmed live, no VPN sidecar or
+  # extra_hosts quirk here, unlike stacks-mcp.
+  tplink-mcp:
+    build: ./tplink-mcp
+    container_name: tplink-mcp
+    restart: unless-stopped
+    environment:
+      - TPLINK_ROUTER_HOST=${TPLINK_ROUTER_HOST:-192.168.0.1}
+      - TPLINK_ROUTER_USERNAME=${TPLINK_ROUTER_USERNAME:-admin}
+      - TPLINK_ROUTER_PASSWORD=${TPLINK_ROUTER_PASSWORD}
+    volumes:
+      - ./mentor_data:/app/mentor_data
+
   caddy:
     build: ./caddy
     container_name: mentor-caddy

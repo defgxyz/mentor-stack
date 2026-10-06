@@ -223,14 +223,14 @@ def list_users(args: dict, **kwargs) -> str:
         "SELECT id, name, type, is_family_admin, notes, available_hours_per_week, "
         "available_money_per_month, budget_currency, has_own_pairing, home_timezone, "
         "recent_timezone, recent_timezone_at, share_location_with_family, date_of_birth, gender, "
-        "persona_key, preferred_checkin_channel "
+        "persona_key, preferred_checkin_channel, share_network_activity_with_family "
         "FROM users ORDER BY name"
     ).fetchall()
     con.close()
     cols = ["id", "name", "type", "is_family_admin", "notes", "available_hours_per_week",
             "available_money_per_month", "budget_currency", "has_own_pairing", "home_timezone",
             "recent_timezone", "recent_timezone_at", "share_location_with_family", "date_of_birth", "gender",
-            "persona_key", "preferred_checkin_channel"]
+            "persona_key", "preferred_checkin_channel", "share_network_activity_with_family"]
     return json.dumps([dict(zip(cols, r)) for r in rows])
 
 
@@ -299,6 +299,42 @@ def set_location_sharing(args: dict, **kwargs) -> str:
     con.commit()
     con.close()
     return json.dumps({"user_name": target_user_name, "share_location_with_family": share})
+
+
+def shares_network_activity_with_family(user_name: str) -> bool:
+    """Used by tplink-mcp to gate network-activity queries - same shape as
+    shares_location_with_family, but a separate flag/consent entirely."""
+    con = db.connect()
+    row = con.execute("SELECT share_network_activity_with_family FROM users WHERE name = ?", (user_name,)).fetchone()
+    con.close()
+    return bool(row and row[0])
+
+
+def set_network_activity_sharing(args: dict, **kwargs) -> str:
+    """Opt a user in/out of sharing their home-network activity (online/
+    offline, live up/down speed) with the rest of the family (beyond
+    family admins, who can always see everyone regardless). Off by
+    default. Gated: only the person themselves, or a family admin, may
+    change it - requesting_user_name must be whoever you're actually
+    talking to in THIS conversation, never a name they merely claim on
+    someone else's behalf."""
+    requesting_user_name = args["requesting_user_name"]
+    target_user_name = args["target_user_name"]
+    share = bool(args["share"])
+    if requesting_user_name != target_user_name and not is_family_admin(requesting_user_name):
+        return json.dumps({
+            "error": f"'{requesting_user_name}' may not change '{target_user_name}'s network-activity-sharing "
+                     f"setting - only {target_user_name} themselves, or a family admin, can."
+        })
+    con = db.connect()
+    if con.execute("SELECT id FROM users WHERE name = ?", (target_user_name,)).fetchone() is None:
+        con.close()
+        return json.dumps({"error": f"no user named '{target_user_name}'"})
+    con.execute("UPDATE users SET share_network_activity_with_family = ? WHERE name = ?",
+                (1 if share else 0, target_user_name))
+    con.commit()
+    con.close()
+    return json.dumps({"user_name": target_user_name, "share_network_activity_with_family": share})
 
 
 def create_routine(args: dict, **kwargs) -> str:
