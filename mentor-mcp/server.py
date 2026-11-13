@@ -29,6 +29,7 @@ from mentor_data import tools_relationships
 from mentor_data import tools_profile_categories
 from mentor_data import tools_devices
 from mentor_data import tools_personas
+from mentor_data import tools_voice
 from mentor_data import tools_topics
 from mentor_data import tools_services
 from mentor_data import tools_permissions
@@ -201,9 +202,14 @@ def list_objectives(status: Optional[str] = None, domain: Optional[str] = None,
 def get_objective(objective_id: int) -> str:
     """Get full detail on one objective: milestones, progress history, its
     parent (if it's a sub-objective), its own direct sub-objectives (if any,
-    one level - call again on a child's id to go deeper), and any Services
+    one level - call again on a child's id to go deeper), any Services
     linked to it (standing research actively working toward this
-    objective, e.g. property searches feeding a "buy a house" goal)."""
+    objective, e.g. property searches feeding a "buy a house" goal), and
+    tagged_facts - fact_store facts tagged `obj:<this id>` by convention,
+    broader context beyond what was explicitly logged via log_progress.
+    Use progress + milestones + tagged_facts together when asked to recap
+    or tell the story of how an objective went - narrate from what's
+    actually here, chronologically, never invented."""
     return impl.get_objective({"objective_id": objective_id})
 
 
@@ -809,13 +815,15 @@ def delete_profile_template_routine(template_id: int) -> str:
 @mcp.tool()
 def approve_pairing_code(requesting_user_name: str, code: str, mentor_user_name: Optional[str] = None,
                           platform: Optional[str] = None) -> str:
-    """Approve a pending Telegram pairing request so a new family member can
-    start using Mentor themselves. Only a family-admin user may do this -
-    requesting_user_name must be whoever you're actually talking to in THIS
-    conversation (the one you identified at the start of the chat), not a
-    name they merely claim on someone else's behalf. The code is the one
-    Telegram DM'd to the new person when they first messaged the bot -
-    they'll need to tell the family admin that code directly. Pass
+    """Approve a pending pairing request (platform defaults to "telegram";
+    pass "discord" for a Discord pairing - same mechanism, different
+    platform) so a new family member can start using Mentor themselves. Only
+    a family-admin user may do this - requesting_user_name must be whoever
+    you're actually talking to in THIS conversation (the one you identified
+    at the start of the chat), not a name they merely claim on someone
+    else's behalf. The code is the one the platform's bot DM'd to the new
+    person when they first messaged it - they'll need to tell the family
+    admin that code directly. Pass
     mentor_user_name (from list_users - call create_user first if they're
     new) to record which Mentor user this pairing belongs to - this writes a
     real, permanent link between their conversation and their user record,
@@ -833,7 +841,8 @@ def approve_pairing_code(requesting_user_name: str, code: str, mentor_user_name:
 
 @mcp.tool()
 def list_pending_pairings(platform: Optional[str] = None) -> str:
-    """List pending Telegram pairing requests waiting for approval (names and
+    """List pending pairing requests (platform defaults to "telegram"; pass
+    "discord" for Discord) waiting for approval (names and
     request times only - never the code itself, matching Hermes's own
     design). Useful for a family admin asking "is anyone waiting to join"."""
     args = {"platform": platform}
@@ -950,6 +959,31 @@ def set_persona(requesting_user_name: str, target_user_name: str, persona_key: O
     return tools_personas.set_persona({
         "requesting_user_name": requesting_user_name, "target_user_name": target_user_name,
         "persona_key": persona_key,
+    })
+
+
+@mcp.tool()
+def list_available_voices(user_name: str) -> str:
+    """Every selectable Piper TTS voice (male/female, US/UK English) - call
+    this before set_tts_voice to get a real voice_key, never guess one.
+    Also returns their current_voice_key (null means "on the default
+    voice", not "no voice configured") and default_voice_key."""
+    return tools_voice.list_available_voices({"user_name": user_name})
+
+
+@mcp.tool()
+def set_tts_voice(requesting_user_name: str, target_user_name: str, voice_key: Optional[str] = None) -> str:
+    """Set target_user_name's Piper TTS voice for voice replies (see
+    list_available_voices for real options) - takes effect on their very
+    next voice reply, no restart needed. Pass voice_key=null to reset to
+    the default voice. requesting_user_name must be whoever you're
+    actually talking to in THIS conversation, never a claimed identity.
+    Only the person themselves, or a family admin, may call this - no age
+    restriction (unlike set_persona), since picking a voice isn't
+    personality/content-sensitive."""
+    return tools_voice.set_tts_voice({
+        "requesting_user_name": requesting_user_name, "target_user_name": target_user_name,
+        "voice_key": voice_key,
     })
 
 

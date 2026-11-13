@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 from . import db
 from . import scheduling
+from . import tools_memory
 
 
 def _now() -> str:
@@ -430,4 +431,21 @@ def get_objective(args: dict, **kwargs) -> str:
     objective["services"] = [dict(zip(service_cols, r)) for r in service_rows]
 
     con.close()
+
+    # fact_store facts tagged `obj:<id>` by convention (see SOUL.md's
+    # Objectives section) - broader conversational context the agent judged
+    # worth linking to this objective, distinct from progress_entries (which
+    # only holds what was explicitly logged via log_progress). Both feed
+    # "tell me the story of this objective"; neither replaces the other.
+    # Best-effort: a missing/unreadable memory store must not break get_objective.
+    objective["tagged_facts"] = []
+    if objective.get("user_name"):
+        tag_marker = f"obj:{args['objective_id']}"
+        facts, _facts_error = tools_memory.read_holographic_facts(objective["user_name"])
+        objective["tagged_facts"] = [
+            {"fact_id": f["fact_id"], "content": f["content"], "created_at": f["created_at"]}
+            for f in facts
+            if tag_marker in [t.strip() for t in f.get("tags", "").split(",")]
+        ]
+
     return json.dumps(objective)

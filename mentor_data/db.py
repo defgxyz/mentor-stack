@@ -560,6 +560,10 @@ _MIGRATIONS = [
     # with precise GPS location, and either should be settable without the
     # other changing.
     "ALTER TABLE users ADD COLUMN share_network_activity_with_family INTEGER NOT NULL DEFAULT 0",
+    # NULL = "use voices.DEFAULT_VOICE" (same NULL-means-default convention as
+    # persona_key above) - an explicit value means this person chose it via
+    # set_tts_voice, see tools_voice.py.
+    "ALTER TABLE users ADD COLUMN tts_voice TEXT",
 ]
 
 # Evgeniy's own Telegram pairing predates the `conversations` table entirely

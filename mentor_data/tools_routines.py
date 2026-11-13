@@ -76,6 +76,101 @@ def _ensure_memory_provider_config(client, profile: str) -> None:
     client.post("/api/fs/write-text", json={"path": path, "content": yaml.safe_dump(cfg, sort_keys=False)})
 
 
+def _ensure_voice_tts_config(client, profile: str) -> None:
+    """Best-effort - never raises. Same "assert, don't trust the clone"
+    reasoning as _ensure_memory_provider_config, for the voice-reply setup
+    (local Piper TTS + the agent-callable `tts` toolset + always-on
+    voice-in/voice-out): a real incident already happened once where this
+    was set on "default" alone and every other real profile (the ones
+    actual family members talk through) silently kept the old disabled/
+    unset state after a restart - "default" itself is never the live
+    chat target, so it being correct proves nothing about the profiles
+    that matter. Also pins tts.piper.voice to voices.DEFAULT_VOICE rather
+    than leaving it unset (which would silently fall back to Piper's own
+    default, en_US-lessac-medium) - a person can change their own voice
+    later via tools_voice.set_tts_voice, which overwrites this."""
+    import yaml
+    path = f"/opt/data/profiles/{profile}/config.yaml"
+    read_resp = client.get("/api/fs/read-text", params={"path": path})
+    if read_resp.status_code != 200:
+        return
+    try:
+        cfg = yaml.safe_load(read_resp.json().get("text", "")) or {}
+    except yaml.YAMLError:
+        return
+    from . import voices
+    tts_cfg = cfg.setdefault("tts", {})
+    tts_cfg["provider"] = "piper"
+    tts_cfg.setdefault("piper", {})["voice"] = voices.DEFAULT_VOICE
+    cfg.setdefault("voice", {})["auto_tts"] = True
+    disabled_toolsets = cfg.setdefault("agent", {}).setdefault("disabled_toolsets", [])
+    if "tts" in disabled_toolsets:
+        disabled_toolsets.remove("tts")
+    client.post("/api/fs/write-text", json={"path": path, "content": yaml.safe_dump(cfg, sort_keys=False)})
+
+
+def _strip_cloned_identity_credentials(client, profile: str) -> None:
+    """Best-effort - never raises. Cloning from "default" (see
+    _provision_hermes_profile) copies its config.yaml/.env verbatim,
+    including default's own live Telegram home_channel (a specific
+    person's own chat_id) and dashboard login password hash - neither
+    belongs to a different person's profile. Beyond the privacy concern,
+    an enabled platform entry is also a real startup failure waiting to
+    happen under gateway.multiplex_profiles: Hermes refuses to start a
+    secondary profile that re-declares a credential/listener the primary
+    "default" profile already owns (gateway/run_adapters.py's
+    _refuse_duplicate_claim / _load_secondary_profile_config) - hit live
+    once a profile created before this existed (natalia) was restarted
+    with telegram.home_channel configured on "default". Every platform
+    entry is disabled here on principle, not just telegram, since only
+    "default" is ever meant to own a live platform listener under
+    multiplex - every other profile is reached solely via
+    gateway.profile_routes on "default".
+
+    Deliberately left alone: shared, non-identity-bound secrets (the
+    model credential, GIPHY_API_KEY, HF_TOKEN, etc.) - those are meant to
+    be common across every family member's profile, not unique to
+    "default"."""
+    import yaml
+    config_path = f"/opt/data/profiles/{profile}/config.yaml"
+    read_resp = client.get("/api/fs/read-text", params={"path": config_path})
+    if read_resp.status_code == 200:
+        try:
+            cfg = yaml.safe_load(read_resp.json().get("text", "")) or {}
+        except yaml.YAMLError:
+            cfg = None
+        if isinstance(cfg, dict):
+            changed = False
+            platforms = cfg.get("platforms")
+            if isinstance(platforms, dict):
+                for platform_cfg in platforms.values():
+                    if isinstance(platform_cfg, dict) and platform_cfg.get("enabled"):
+                        platform_cfg["enabled"] = False
+                        platform_cfg.pop("home_channel", None)
+                        changed = True
+            if cfg.pop("dashboard", None) is not None:
+                changed = True
+            if changed:
+                client.post("/api/fs/write-text", json={
+                    "path": config_path, "content": yaml.safe_dump(cfg, sort_keys=False)})
+
+    env_path = f"/opt/data/profiles/{profile}/.env"
+    read_resp = client.get("/api/fs/read-text", params={"path": env_path})
+    if read_resp.status_code == 200:
+        text = read_resp.json().get("text", "")
+        new_lines, changed = [], False
+        for line in text.splitlines():
+            bare = line.strip()
+            key = bare.split("=", 1)[0].strip() if ("=" in bare and not bare.startswith("#")) else ""
+            if key and "HOME_CHANNEL" in key:
+                new_lines.append(f"# {line}  # stripped on profile creation - belonged to 'default'")
+                changed = True
+            else:
+                new_lines.append(line)
+        if changed:
+            client.post("/api/fs/write-text", json={"path": env_path, "content": "\n".join(new_lines) + "\n"})
+
+
 def _provision_hermes_profile(user_name: str) -> "str | None":
     """Best-effort: create a real, isolated Hermes profile for a newly
     created Mentor user via Hermes's own POST /api/profiles (the plain REST
@@ -84,7 +179,13 @@ def _provision_hermes_profile(user_name: str) -> "str | None":
     SOUL.md/credentials/memory from the "default" profile, then asserting
     the current memory-provider settings directly (see
     _ensure_memory_provider_config - deliberately not just trusted to have
-    come along correctly via the clone). "default"'s own memory is
+    come along correctly via the clone) and the current voice/TTS settings
+    (see _ensure_voice_tts_config, same reasoning), then stripping default's own
+    identity-bound credentials the clone also brought along - its live
+    Telegram home_channel and dashboard login password hash (see
+    _strip_cloned_identity_credentials; shared, non-identity-bound
+    secrets like the model credential are deliberately left in place).
+    "default"'s own memory is
     deliberately kept generic/family-wide only (see the "Evgeniy moved to
     his own profile" plan entry) so cloning it for a brand-new person is
     safe as-is - no separate blank-memory step needed the way it was for
@@ -109,6 +210,8 @@ def _provision_hermes_profile(user_name: str) -> "str | None":
             if resp.status_code >= 400:
                 return f"Hermes profile creation failed ({resp.status_code}): {resp.text[:200]}"
             _ensure_memory_provider_config(client, profile)
+            _ensure_voice_tts_config(client, profile)
+            _strip_cloned_identity_credentials(client, profile)
         return None
     except Exception as e:
         return f"failed to create Hermes profile: {e}"

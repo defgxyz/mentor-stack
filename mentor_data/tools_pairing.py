@@ -1,7 +1,10 @@
 """
-Self-service Telegram pairing approval for the Family Admin, from inside a
-normal Mentor conversation - instead of needing operator/CLI access
+Self-service pairing approval for the Family Admin, from inside a normal
+Mentor conversation - instead of needing operator/CLI access
 (`hermes pairing approve`) every time a new family member wants to join.
+Platform-generic (the `platform` arg defaults to "telegram"; "discord" works
+identically) since Hermes's own pairing store is keyed the same way for any
+platform - see PAIRING_DIR's `{platform}-pending.json`/`{platform}-approved.json`.
 
 This is a careful, minimal reimplementation of the *validation* half of
 Hermes's own gateway/pairing.py PairingStore (read directly from the real
@@ -172,14 +175,16 @@ def _save_json(path: Path, data: dict) -> None:
 
 
 def approve_pairing_code(args: dict, **kwargs) -> str:
-    """Approve a pending Telegram pairing code so a new family member can
-    start using Mentor. Only callable by a family-admin user - checked
-    against the requesting_user_name you were told earlier in this
-    conversation, not inferred. mentor_user_name is which Mentor user (from
-    list_users - create_user first if they're new) this pairing belongs to;
-    when given and that user exists, a real conversations row gets written
-    linking the platform chat to them, so identity doesn't have to be
-    re-inferred conversationally every future session, and their
+    """Approve a pending pairing code (platform defaults to "telegram"; pass
+    "discord" etc - the mechanism is platform-generic, keyed only by the
+    {platform}-pending.json/{platform}-approved.json file pair) so a new
+    family member can start using Mentor. Only callable by a family-admin
+    user - checked against the requesting_user_name you were told earlier in
+    this conversation, not inferred. mentor_user_name is which Mentor user
+    (from list_users - create_user first if they're new) this pairing
+    belongs to; when given and that user exists, a real conversations row
+    gets written linking the platform chat to them, so identity doesn't have
+    to be re-inferred conversationally every future session, and their
     has_own_pairing flips to true automatically."""
     requesting_user = args["requesting_user_name"]
     if not is_family_admin(requesting_user):
@@ -221,14 +226,14 @@ def approve_pairing_code(args: dict, **kwargs) -> str:
     _save_json(pending_path, pending)
 
     approved = _load_json(approved_path)
-    telegram_chat_id = matched_entry["user_id"]
-    telegram_display_name = matched_entry.get("user_name", "")
-    approved[telegram_chat_id] = {"user_name": telegram_display_name, "approved_at": now}
+    chat_id = matched_entry["user_id"]
+    display_name = matched_entry.get("user_name", "")
+    approved[chat_id] = {"user_name": display_name, "approved_at": now}
     _save_json(approved_path, approved)
 
     result = {
-        "ok": True, "platform": platform, "chat_id": telegram_chat_id,
-        "telegram_display_name": telegram_display_name, "approved_by": requesting_user,
+        "ok": True, "platform": platform, "chat_id": chat_id,
+        "display_name": display_name, "approved_by": requesting_user,
     }
 
     mentor_user_name = args.get("mentor_user_name")
@@ -242,7 +247,7 @@ def approve_pairing_code(args: dict, **kwargs) -> str:
                 "but call link_conversation once that user exists to record the link"
             )
         else:
-            _link_conversation(con, platform, telegram_chat_id, row[0])
+            _link_conversation(con, platform, chat_id, row[0])
             # A real approved Telegram pairing IS "has their own paired
             # conversation" by definition - flip it here rather than
             # leaving it to a separate, easy-to-forget update_user call.
@@ -250,7 +255,7 @@ def approve_pairing_code(args: dict, **kwargs) -> str:
             con.commit()
             con.close()
             result["linked_mentor_user"] = mentor_user_name
-            route_error = _ensure_profile_route(platform, telegram_chat_id, mentor_user_name)
+            route_error = _ensure_profile_route(platform, chat_id, mentor_user_name)
             if route_error:
                 result["profile_route_error"] = route_error
             else:
@@ -259,7 +264,7 @@ def approve_pairing_code(args: dict, **kwargs) -> str:
                     "platform once the gateway restarts to pick up the new route - not "
                     "immediate, same as any other config.yaml change."
                 )
-            pulse_error = _ensure_mentor_pulse_cron(platform, telegram_chat_id, mentor_user_name)
+            pulse_error = _ensure_mentor_pulse_cron(platform, chat_id, mentor_user_name)
             if pulse_error:
                 result["mentor_pulse_error"] = pulse_error
             else:

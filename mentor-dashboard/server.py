@@ -58,6 +58,7 @@ from mentor_data import tools_owntracks_credentials
 from mentor_data import tools_pairing
 from mentor_data import tools_memory
 from mentor_data import tools_personas
+from mentor_data import tools_voice
 from mentor_data import tools_notifications
 from mentor_data import tools_permissions
 from mentor_data import tools_services
@@ -99,6 +100,29 @@ HERMES_DASHBOARD_PASSWORD = os.environ.get("HERMES_DASHBOARD_PASSWORD", "")
 # API for a value that only changes if the bot itself is ever recreated -
 # update this string by hand if that ever happens).
 TELEGRAM_BOT_USERNAME = "Mentor8888Bot"
+
+# Discord's bot-invite flow needs the Application (client) ID, resolved once
+# via Discord's own GET /oauth2/applications/@me (same one-time-resolve-and-
+# hardcode pattern as TELEGRAM_BOT_USERNAME above) - empty until a real
+# DISCORD_BOT_TOKEN exists and the application is created in Discord's
+# Developer Portal. Permission bits: View Channels(1024) + Send Messages(2048)
+# + Add Reactions(64) + Embed Links(16384) + Attach Files(32768) +
+# Read Message History(65536) + Use External Emojis(262144) + Connect(1048576)
+# + Speak(2097152) = 3525696 - text parity with the Telegram adapter PLUS
+# Hermes's own live voice-channel feature (join/leave/speak/listen - real-time
+# STT+TTS in an actual Discord voice call, confirmed in the Discord adapter's
+# own source - no equivalent exists on Telegram, which only ever exchanges
+# voice as file attachments). Without Connect+Speak the bot can still DM/text
+# normally, it just can't join a voice channel if asked to.
+DISCORD_CLIENT_ID = os.environ.get("DISCORD_CLIENT_ID", "")
+DISCORD_BOT_PERMISSIONS = 3525696
+
+
+def _discord_invite_url() -> Optional[str]:
+    if not DISCORD_CLIENT_ID:
+        return None
+    return (f"https://discord.com/oauth2/authorize?client_id={DISCORD_CLIENT_ID}"
+            f"&permissions={DISCORD_BOT_PERMISSIONS}&scope=bot")
 
 _PAGE = """<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -544,6 +568,7 @@ def user_view(user_name: str, domain: Optional[str] = None, show_archived: Optio
       </details>
     """
     persona_section_html = _persona_section_html(user_name, user_row.get("type"))
+    voice_section_html = _voice_section_html(user_name)
     body = f"""
       <h1 class="text-2xl font-bold mb-1">{escape(user_name)}</h1>
       <div class="text-sm opacity-60 mb-2">Their objectives, including private ones (only visible here) &mdash; and a real chat with Hermes.</div>
@@ -551,6 +576,7 @@ def user_view(user_name: str, domain: Optional[str] = None, show_archived: Optio
       {location_sharing_html}
       {edit_profile_html}
       {persona_section_html}
+      {voice_section_html}
       {_nav_html(user_name)}
 
       <div class="text-xs uppercase tracking-wide opacity-50 mb-2">Objectives</div>
@@ -703,6 +729,47 @@ def set_persona_route(user_name: str, persona_key: str = Form(""), acting_admin:
         "persona_key": persona_key or None,
     }))
     notice = result["error"] if "error" in result else f"Personality set to {result['persona_name']}."
+    return RedirectResponse(url=f"/user/{user_name}?notice={quote(notice)}", status_code=303)
+
+
+def _voice_section_html(user_name: str) -> str:
+    """Collapsed by default, same as Personality/Edit profile. Always
+    self-service (requesting_user_name == target_user_name) - unlike
+    Personality, set_tts_voice has no age gate, so there's no admin-
+    selection fallback needed here."""
+    info = json.loads(tools_voice.list_available_voices({"user_name": user_name}))
+    if "error" in info:
+        return ""
+    current = info.get("current_voice_key")
+    option_html = "".join(
+        f'<option value="{escape(o["voice_key"])}"{" selected" if o["voice_key"] == current else ""}>'
+        f'{escape(o["label"])} ({escape(o["gender"])}, {escape(o["locale"])}){" - default" if o["is_default"] else ""}'
+        f'</option>'
+        for o in info["options"]
+    )
+    return f"""
+      <details class="collapse collapse-arrow bg-base-100 border border-base-300 mb-4">
+        <summary class="collapse-title text-sm font-medium">Voice</summary>
+        <div class="collapse-content">
+          <form method="post" action="/user/{escape(user_name)}/voice" class="space-y-2 pt-1">
+            <div class="form-control">
+              <label class="label py-1"><span class="label-text text-sm">Voice reply voice</span></label>
+              <select name="voice_key" class="select select-bordered select-sm w-full max-w-xs">{option_html}</select>
+            </div>
+            <button type="submit" class="btn btn-xs btn-outline mt-1">Save</button>
+          </form>
+        </div>
+      </details>
+    """
+
+
+@app.post("/user/{user_name}/voice")
+def set_tts_voice_route(user_name: str, voice_key: str = Form("")):
+    result = json.loads(tools_voice.set_tts_voice({
+        "requesting_user_name": user_name, "target_user_name": user_name,
+        "voice_key": voice_key or None,
+    }))
+    notice = result["error"] if "error" in result else f"Voice set to {result['voice_label']}."
     return RedirectResponse(url=f"/user/{user_name}?notice={quote(notice)}", status_code=303)
 
 
@@ -912,6 +979,10 @@ def admin_page(new_user_error: Optional[str] = None, notice: Optional[str] = Non
           <div class="card-body p-4"><h2 class="card-title text-base">Telegram onboarding</h2>
           <div class="text-sm opacity-60">Get someone paired, approve pending codes.</div></div>
         </a>
+        <a href="/admin/discord" class="card bg-base-100 shadow-sm border-2 border-info hover:shadow-md transition">
+          <div class="card-body p-4"><h2 class="card-title text-base">Discord onboarding</h2>
+          <div class="text-sm opacity-60">Get someone paired, approve pending codes.</div></div>
+        </a>
         <a href="/admin/location" class="card bg-base-100 shadow-sm border-2 border-secondary hover:shadow-md transition">
           <div class="card-body p-4"><h2 class="card-title text-base">Location credentials</h2>
           <div class="text-sm opacity-60">Provision or refresh an OwnTracks device credential.</div></div>
@@ -997,6 +1068,91 @@ def admin_telegram_page(notice: Optional[str] = None, new_user_error: Optional[s
       </div>
     """
     return _admin_subscreen("Telegram onboarding", body)
+
+
+@app.get("/admin/discord", response_class=HTMLResponse)
+def admin_discord_page(notice: Optional[str] = None, new_user_error: Optional[str] = None):
+    users = _list_users()
+    admins = [u for u in users if u.get("is_family_admin")]
+    requesting_label, requesting_field, target_options, onboarding_options = _admin_context(users, admins)
+    notice_html = (
+        f'<div class="alert alert-success text-sm py-2 px-3 mb-2"><span>{escape(notice)}</span></div>' if notice else ""
+    )
+    error_html = (
+        f'<div class="alert alert-error text-sm py-2 px-3 mb-2"><span>{escape(new_user_error)}</span></div>'
+        if new_user_error else ""
+    )
+    invite_url = _discord_invite_url()
+    if invite_url:
+        invite_html = f"""
+          <div>
+            <div class="text-xs uppercase opacity-50 mb-1">1. Invite the bot to your server (one-time)</div>
+            <a href="{invite_url}" target="_blank" class="btn btn-info btn-sm">Add Mentor to a Discord server</a>
+            <div class="text-xs opacity-50 mt-1">Only needs doing once - every family member below then talks to that
+            same bot inside that server, or DMs it directly once they share a server with it.</div>
+          </div>
+        """
+    else:
+        invite_html = """
+          <div class="alert alert-warning text-sm py-2 px-3">
+            <span>Discord isn't set up yet - needs a real bot created at
+            <code>discord.com/developers/applications</code> (Message Content + Server Members
+            intents enabled), its token saved as <code>DISCORD_BOT_TOKEN</code> and application id
+            as <code>DISCORD_CLIENT_ID</code>, and <code>platforms.discord.enabled: true</code> in
+            Hermes's config.yaml, then a gateway restart.</span>
+          </div>
+        """
+    pending = json.loads(tools_pairing.list_pending_pairings({"platform": "discord"}))
+    if pending:
+        pending_html = '<ul class="text-sm mt-2 space-y-1">' + "".join(
+            f'<li>&bull; {escape(p.get("user_name") or "(unknown)")} &mdash; requested '
+            f'{datetime.fromtimestamp(p["requested_at"], tz=timezone.utc).strftime("%-d %b %H:%M UTC") if p.get("requested_at") else "recently"}</li>'
+            for p in pending
+        ) + "</ul>"
+    else:
+        pending_html = '<p class="text-sm opacity-50 mt-2">No pending requests right now - ask them to message the bot first.</p>'
+    body = f"""
+      {notice_html}{error_html}
+      <div class="card bg-base-100 shadow-sm border-2 border-info">
+        <div class="card-body p-4 space-y-3">
+          {invite_html}
+          <div>
+            <div class="text-xs uppercase opacity-50 mb-1">2. Get someone paired</div>
+            <div class="text-sm opacity-60">Generate the steps to get a family member talking to Mentor on Discord
+            for the first time.</div>
+            <form method="get" action="/admin/discord-onboarding" class="mt-2 space-y-2">
+              <div class="form-control">
+                <label class="label py-1"><span class="label-text text-sm">For</span></label>
+                <select name="user_name" class="select select-bordered select-sm w-full max-w-xs">{onboarding_options}</select>
+              </div>
+              <button type="submit" class="btn btn-info btn-sm mt-2">Generate</button>
+            </form>
+          </div>
+
+          <h3 class="font-semibold text-sm mt-5">Pending Discord pairings</h3>
+          <div class="text-xs opacity-60">Someone who's already messaged the bot but isn't approved yet. The
+          code itself is never shown here (it's DM'd directly to them) - ask them for it, then approve below.</div>
+          {pending_html}
+          <form method="post" action="/admin/approve-pairing" class="mt-3 space-y-2">
+            <input type="hidden" name="platform" value="discord">
+            <div class="form-control">
+              {requesting_label}
+              {requesting_field}
+            </div>
+            <div class="form-control">
+              <label class="label py-1"><span class="label-text text-sm">Code (ask them what the bot DM'd)</span></label>
+              <input name="code" required class="input input-bordered input-sm w-full max-w-xs uppercase">
+            </div>
+            <div class="form-control">
+              <label class="label py-1"><span class="label-text text-sm">For</span></label>
+              <select name="mentor_user_name" class="select select-bordered select-sm w-full max-w-xs">{target_options}</select>
+            </div>
+            <button type="submit" class="btn btn-info btn-sm mt-2">Approve</button>
+          </form>
+        </div>
+      </div>
+    """
+    return _admin_subscreen("Discord onboarding", body)
 
 
 @app.get("/admin/location", response_class=HTMLResponse)
@@ -1319,20 +1475,61 @@ def admin_telegram_onboarding(user_name: str):
     return _PAGE.format(title=f"Telegram onboarding — {user_name}", body=body)
 
 
+@app.get("/admin/discord-onboarding", response_class=HTMLResponse)
+def admin_discord_onboarding(user_name: str):
+    invite_url = _discord_invite_url()
+    invite_reminder = (
+        f'<div class="text-sm">Not in a server with {escape(user_name)} yet? '
+        f'<a href="{invite_url}" target="_blank" class="link">Invite the bot</a> to one you share first.</div>'
+        if invite_url else
+        '<div class="text-sm opacity-60">Discord bot setup isn\'t finished yet - see the warning on the '
+        '<a href="/admin/discord" class="link">Discord onboarding page</a>.</div>'
+    )
+    body = f"""
+      <a href="/admin/discord" class="link text-sm inline-block mb-4">&larr; back to Discord onboarding</a>
+      <h1 class="text-2xl font-bold mb-2">Discord onboarding for {escape(user_name)}</h1>
+      <div class="card bg-base-100 border border-base-300">
+        <div class="card-body p-4 space-y-3">
+          <div>
+            <div class="text-xs uppercase opacity-50 mb-1">1. Share a server with the bot</div>
+            {invite_reminder}
+          </div>
+          <div>
+            <div class="text-xs uppercase opacity-50 mb-1">2. Say hello</div>
+            <div class="text-sm">Have {escape(user_name)} DM the bot directly, or @mention it in a channel of
+            that server - the bot will DM back a one-time pairing code.</div>
+          </div>
+          <div>
+            <div class="text-xs uppercase opacity-50 mb-1">3. Get the code</div>
+            <div class="text-sm">{escape(user_name)} tells a family admin that code directly - never share it
+            anywhere else, it's how the bot proves it's really them.</div>
+          </div>
+          <div>
+            <div class="text-xs uppercase opacity-50 mb-1">4. Approve it</div>
+            <div class="text-sm">Back on the <a href="/admin/discord" class="link">Discord onboarding page</a>, under
+            "Pending Discord pairings" - enter the code, pick {escape(user_name)} as who it's for, and approve.</div>
+          </div>
+        </div>
+      </div>
+    """
+    return _PAGE.format(title=f"Discord onboarding — {user_name}", body=body)
+
+
 @app.post("/admin/approve-pairing", response_class=HTMLResponse)
 def admin_approve_pairing(requesting_user_name: str = Form(...), code: str = Form(...),
-                           mentor_user_name: str = Form(...)):
+                           mentor_user_name: str = Form(...), platform: str = Form("telegram")):
     result = json.loads(tools_pairing.approve_pairing_code({
         "requesting_user_name": requesting_user_name, "code": code,
-        "mentor_user_name": mentor_user_name, "platform": "telegram",
+        "mentor_user_name": mentor_user_name, "platform": platform,
     }))
+    admin_path = f"/admin/{platform}"
     if "error" in result:
-        return RedirectResponse(url=f"/admin/telegram?new_user_error={quote(result['error'])}", status_code=303)
-    notices = [f"{mentor_user_name} is now paired on Telegram."]
+        return RedirectResponse(url=f"{admin_path}?new_user_error={quote(result['error'])}", status_code=303)
+    notices = [f"{mentor_user_name} is now paired on {platform.capitalize()}."]
     for key in ("conversation_link_error", "profile_route_error", "profile_route_note"):
         if result.get(key):
             notices.append(result[key])
-    return RedirectResponse(url=f"/admin/telegram?notice={quote(' / '.join(notices))}", status_code=303)
+    return RedirectResponse(url=f"{admin_path}?notice={quote(' / '.join(notices))}", status_code=303)
 
 
 @app.post("/admin/update-service-status", response_class=HTMLResponse)

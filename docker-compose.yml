@@ -76,7 +76,8 @@ services:
       - ~/.hermes/profiles:/hermes_home/profiles:rw
 
   hermes:
-    image: nousresearch/hermes-agent:latest
+    build: ./hermes
+    image: mentor-hermes:latest
     container_name: hermes
     restart: unless-stopped
     command: gateway run
@@ -84,8 +85,22 @@ services:
       - mentor-mcp
     environment:
       - HERMES_DASHBOARD=1
+      # The base image's own default HERMES_WRITE_SAFE_ROOT=/opt/data (sandboxes every
+      # agent-initiated write to the mounted data volume) is correct and left alone, but
+      # Hermes's own built-in auto-voice-reply code (build_auto_tts_output_path in
+      # gateway/platforms/base.py) hardcodes tempfile.gettempdir() (/tmp) for the
+      # synthesized audio file WITHOUT ever consulting that same safe-root setting - a
+      # real bug in Hermes itself (confirmed live: "output_path targets a protected
+      # credential or system path: /tmp/hermes_voice/..."), not something specific to
+      # this project's provider/profile config. Widening the root to also allow /tmp
+      # (container-ephemeral, holds nothing persistent/sensitive) is the minimal fix -
+      # every other write still stays confined to /opt/data.
+      - HERMES_WRITE_SAFE_ROOT=/opt/data:/tmp
     volumes:
       - ~/.hermes:/opt/data
+      # See hermes/patches/README.md — bind-mounted fix, not baked into the image (floating
+      # :latest base tag means a build could pull in an unreviewed upstream version).
+      - ./hermes/patches/tts_tool_delivery.py:/opt/hermes/tools/tts_tool_delivery.py:ro
     deploy:
       resources:
         limits:

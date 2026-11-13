@@ -761,6 +761,38 @@ transferring data right now.
 
 ## 7. Known open items (as of 2026-09-27)
 
+- **Evgeniy's `mentor-pulse` cron + his profile's cron store were wiped by a
+  crash and recreated** (2026-11-14) — a gateway crash-loop on 2026-11-05
+  (repeated `SIGKILL`/no-clean-exit, cause never identified) tore a write to
+  `/opt/data/profiles/evgeniy/cron/jobs.json` mid-flight, corrupting it to
+  garbage bytes; the gateway then logged `Cron database corrupted and
+  unrepairable` once a minute, continuously, for 9 days before it was
+  noticed. All of his cron jobs were lost (no backup existed; corrupted file
+  kept as `jobs.json.bkp-corrupted-20261114012321` for reference only, not
+  recoverable). Separately, repeated "Agent cache pressure... evicting LRU
+  session(s)" events meant his sessions weren't closing cleanly, so
+  holographic memory extraction (which only fires on a clean session-end)
+  silently stopped too — his `memory_store.db` has no new fact between
+  2026-11-02 and this fix despite continuous real conversation.
+  **Fix**: `jobs.json` reset to a valid empty file, corrupted
+  `executions.db` dropped (history only, safe to lose), `docker compose
+  restart hermes` to clear the stuck session state. **The `mentor-pulse` job
+  was then recreated the correct way — via `_ensure_mentor_pulse_cron`
+  itself** (`mentor_data/tools_pairing.py`, called directly with
+  `('telegram', '5356768720', 'Evgeniy')`), not hand-built — an initial
+  attempt to hand-roll a replacement using the long-retired, cross-family-
+  leaking `coaching-checkin`/`/due-followups` shape (see §3a) was caught and
+  removed before it ever ran on schedule. Current job: id `a01f63e93911`,
+  name `mentor-pulse`, every `1m`, skills `objective-followup, services,
+  topic-checkin, topic-notification`, deliver `telegram:5356768720`, monitor
+  `http://mentor-mcp:8000/due-pulse?user_name=Evgeniy` — verified correctly
+  per-user scoped (Jasmine's `/due-pulse` signal returns different ids, no
+  cross-family mixing). Confirmed real backlog existed from the outage: 20
+  overdue objectives, 6 due services, all 7 topic-checkin domains due.
+  **Still open**: root cause of the Nov 5 SIGKILLs themselves was never
+  found (not an OOM-kill — `suspected_oom=False` each time); if it recurs,
+  the same corruption could happen again. No mechanism exists to backfill
+  the ~12 days of memory-extraction gap.
 - **Stacks integration live and verified** (2026-10-05) — see §6b. Token
   set, real search/list/curate calls confirmed end-to-end, including a
   live conversational test. Not yet used with any real family interest

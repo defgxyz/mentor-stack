@@ -91,14 +91,14 @@ def read_holographic_facts(user_name: str) -> tuple[list[dict], Optional[str]]:
         con = sqlite3.connect(uri, uri=True, timeout=5)
         try:
             rows = con.execute(
-                "SELECT fact_id, content, category, trust_score, created_at "
+                "SELECT fact_id, content, category, trust_score, created_at, tags "
                 "FROM facts ORDER BY created_at DESC"
             ).fetchall()
         finally:
             con.close()
         return [
             {"fact_id": r[0], "content": r[1], "category": r[2] or "general",
-             "trust_score": r[3], "created_at": r[4]}
+             "trust_score": r[3], "created_at": r[4], "tags": r[5] or ""}
             for r in rows
         ], None
     except sqlite3.Error as e:

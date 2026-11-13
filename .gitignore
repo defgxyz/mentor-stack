@@ -13,6 +13,10 @@ owntracks-data/
 
 # Third-party vendored clone with its own separate git history/origin
 open-wearables/
+hermes-agent-src/
+
+# Backup files (cp x x.bkp-<reason>-<timestamp>, this project's convention before edits)
+*.bkp-*
 
 # Python artifacts
 __pycache__/
